@@ -92,9 +92,30 @@ def pdf_to_xml_tree(path:str):
 
 
 def get_bbox(node):
+    """(x0,y0,x1,y1)"""
     if "bbox" in node.attrib:
         return tuple(map(float,node.attrib["bbox"].split(",")))
     return None
+
+
+def get_page_dimension(root, pageno=1):
+    """ Get page width, page height
+
+    Args:
+    ---
+        root (etree): root node
+        pageno (int, optional): Page num in document. Defaults to 1.
+
+    Returns:
+    ---
+        tuple or None: pageW, pageH
+    """
+    page_i = pageno - 1
+    bbox = get_bbox(root[page_i])
+    if bbox:
+        _, _, pageW, pageH = bbox
+        return pageW, pageH
+    
 
 
 def find_all_tag_recursively(root, tag_name):
