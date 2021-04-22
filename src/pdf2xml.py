@@ -10,7 +10,7 @@ from pathlib import Path
 
 from pdfminer.converter import (HTMLConverter, PDFPageAggregator,
                                 TextConverter, XMLConverter)
-from pdfminer.layout import LAParams
+from pdfminer.layout import LAParams,LTPage
 from pdfminer.pdfdocument import PDFDocument
 from pdfminer.pdfinterp import PDFPageInterpreter, PDFResourceManager
 from pdfminer.pdfpage import PDFPage, PDFTextExtractionNotAllowed
@@ -48,7 +48,7 @@ def _pdf_to_string(path, format='xml', password=''):
     return text
 
 
-def _pdf_to_pages(path):
+def pdf_to_pages(path):
     """ Get object (page, line, text, ...) in PDF
 
     Args:
@@ -78,7 +78,7 @@ def _pdf_to_pages(path):
     for page in PDFPage.get_pages(fp):
         interpreter.process_page(page)
         # receive the LTPage object for the page.
-        layout = device.get_result()
+        layout:LTPage = device.get_result()
         dic[i] = layout
         i = i + 1
     return dic
@@ -116,8 +116,6 @@ def get_page_dimension(root, pageno=1):
         _, _, pageW, pageH = bbox
         return pageW, pageH
     
-
-
 def find_all_tag_recursively(root, tag_name):
     """ Recursively get all <tag_name> nodes in document
 
@@ -135,7 +133,6 @@ def find_all_tag_recursively(root, tag_name):
         node_list = page.findall(query)
         break  # currently support 1st page
     return node_list
-
 
 def find_all_textnodes(root):
     """ Recursively get all <text> nodes in document
