@@ -6,18 +6,18 @@ if PROJECT_DIR not in sys.path:
 
 from pathlib import Path
 from lxml import etree 
-from typing import List
-import numpy as np
+from typing import List, Tuple
+# from PIL import Image 
 
-from src.utils import sha256_hash
-from src.date_util import get_dates_in_text
-from src.pdf2xml import get_page_dimension, pdf_to_xml_tree,find_all_textboxes_B, \
-                        find_all_images
+from src.utils import detect_range, determine_image_type, is_same_location, sha256_hash_str, sha256_hash_byte
+from src.utils.date_util import get_dates_in_text
+from src.utils.pdf2xml import find_all_images_in_document, get_page_dimension, pdf_to_xml_tree,find_all_textboxes_B, \
+                        find_all_images_in_xml
 
 
 def export_to_my_xml(root, out_path):
     txt_blocks = find_all_textboxes_B(root)  # list of (bbox, [ (linebbox,linetxt) ])
-    img_blocks = find_all_images(root)  # [ (bbox, (W,H) ) ]
+    img_blocks = find_all_images_in_xml(root)  # [ (bbox, (W,H) ) ]
     page_node = etree.Element('page')
     txtblock_node = etree.SubElement(page_node,"textblocks")
     for b_bbox, linelist in txt_blocks:
@@ -42,29 +42,56 @@ def export_to_my_xml(root, out_path):
     return 0
 
 
-def is_same_location(bbox_list:List):
-    w_ratios = []  # list of (x0,width) in proportion to page_W
-    h_ratios = []  # list of (y0,height) in proportion to page_H
-    if bbox_list:
-        if isinstance(bbox_list[0],str):
-            bbox_list = [tuple(map(float,b.split(","))) for b in bbox_list]
-    # for bbox in bbox_list:
-    #     if isinstance(bbox,str):
-    #         bbox_ = bbox.split(",")
-    #         if len(bbox_) == 4:
-    #             bbox = bbox_
-    #     (x0,y0,x1,y1) = bbox
-    a = np.std(bbox_list,axis=0)
-    return np.mean(a) < 5  # 5 pixels of derivation on each dimension
+def contruct_block_html(line_list:List[Tuple]):
+    """ Construct blocktext info
 
 
-def main(inputdir:str):
+    Args:
+    ---
+        line_list (List[Tuple]): [(line_bbox, line_text, font_pos)]
+            font_pos={"fontFamilyName$#size=XX$#color=(0,0,0)" : [positions]}
+    Returns:
+    ---
+        list: [{type:"span/br", fontFamily:"", "size":"", "color":"", "text":""})]
+    """
+    html_content = []
+    for line_bbox, line_text, font_pos in line_list:
+        # in a line
+        font_info_dict = {}
+        for fontinfo, positions in font_pos.items():
+            for _range in detect_range(positions):
+                font_info_dict[_range] = fontinfo
+        for k in sorted(font_info_dict.keys()):
+            start = int(k[0])
+            stop = int(k[1]) + 1
+            font_info =  font_info_dict[k]
+            parts = font_info.split("$#")
+            fontname = ""
+            size = ""
+            color = ""
+            for part in parts:
+                if part.startswith("size="):
+                    size = part.split("=")[1]
+                elif part.startswith("color="):
+                    color = part.split("=")[1]
+                else:
+                    fontname = part
+            bboxstr = ",".join([str(b) for b in line_bbox])
+            span = {"type":"span", "fontFamily":fontname, "size":size, "color":color, "bbox":bboxstr}
+            span["text"] = "".join(line_text[start:stop])
+            html_content.append(span)
+        html_content.append({"type":"br"}) 
+    return html_content
+
+
+def main(inputdir:str, output_dir:str):
     """[summary]
     """
     in_dir = Path(inputdir)
     inverse_index = {}  # block_hash -> {docid: [bbox_str]}
+    img_inverse_index = {}  # img_hash -> {docid: [bbox_str]}
     collection_dict = {}  # docid -> {page_dim: (W,H), bbox_str : blocktext}
-    collection_img_dict = {}   # docid -> {bbox_str : (W,H)}
+    collection_img_dict = {}   # {docid -> {bbox_str -> (width, height, bytehash)}}
 
     block_with_page = set()  # {block_hash} of block with "page" in text
     block_with_date = set()  # {block_hash} of block with some dates in text
@@ -77,24 +104,43 @@ def main(inputdir:str):
         path_str = path.as_posix()
         root = pdf_to_xml_tree(path_str)
         txt_blocks = find_all_textboxes_B(root)  # list of (bbox, [ (linebbox,linetxt) ])
-        img_blocks = find_all_images(root)  # [ (bbox, (W,H) ) ]
-        collection_img_dict[docid] = {}
-        for b_bbox, (W,H) in img_blocks:
-            bbox_str = ",".join([str(i) for i in b_bbox])
-            collection_img_dict[docid][bbox_str] = (W,H)  # TODO: get image content
+        img_blocks = find_all_images_in_document(path_str,first_page=True)  # [ LTImage ]
+        if img_blocks:
+            img_blocks = img_blocks[0]  #
+        collection_img_dict[docid] = {}  
+        
+        # --- browse each image block in this document
+        for img in img_blocks:
+            bbox_str = ",".join([str(i) for i in img.bbox])
+            img_stream = img.stream.get_data()
+            hash_ = sha256_hash_byte(img_stream)
+            # img_ext = determine_image_type(img_stream)
+            outpath = Path(output_dir) / f"{hash_}.jpg"
+            if not outpath.exists():
+                with open(outpath,"wb") as f:
+                    f.write(img_stream)
+            collection_img_dict[docid][bbox_str] = (img.width,img.height,hash_)
+            if hash_ in img_inverse_index:
+                docpos_dict = img_inverse_index[hash_]
+                if docid in docpos_dict:
+                    docpos_dict[docid].append(bbox_str)
+                else:
+                    docpos_dict[docid] = [bbox_str]
+            else:
+                img_inverse_index[hash_] = {docid: [bbox_str]}
 
         pageW,pageH = get_page_dimension(root)
         collection_dict[docid] = {"page_dim":(int(pageW),int(pageH))}
-        # -- loop on each block, 
+        # -- browse each text block
         for b_bbox, linelist in txt_blocks:
             bbox_str = ",".join([str(i) for i in b_bbox])
-            box_text = "\n".join(line[1] for line in linelist)
+            box_text = "\n".join("".join(line[1]) for line in linelist)
             box_text_words = box_text.split()
             # ----- make collection_dict
-            collection_dict[docid][bbox_str] = box_text
+            collection_dict[docid][bbox_str] = contruct_block_html(linelist)
             # ---------------------------
             # ----- make inverse_index
-            txt_hash = sha256_hash(box_text)
+            txt_hash = sha256_hash_str(box_text)
             if txt_hash in inverse_index:
                 docpos_dict = inverse_index[txt_hash]
                 if docid in docpos_dict:
@@ -117,8 +163,16 @@ def main(inputdir:str):
     corpus_len = len(collection_dict)
     universal_hashes_ = set()  # hashids that repeat in all doc
     repeated_hashes = set()  # hashids that repeat in more than 1
+    
 
+    # check repeated text blocks
     for hashid,docs in inverse_index.items():
+        if len(docs)==corpus_len:
+            universal_hashes_.add(hashid)
+        elif len(docs) > 1:
+            repeated_hashes.add(hashid)
+    # repeated images blocks
+    for hashid,docs in img_inverse_index.items():
         if len(docs)==corpus_len:
             universal_hashes_.add(hashid)
         elif len(docs) > 1:
@@ -129,41 +183,64 @@ def main(inputdir:str):
     # --- check if each universal_hash has the same bbox across docs
     universal_hashes_same_position = set()
     for hashid in universal_hashes_:
-        pos_dict = inverse_index[hashid]
+        pos_dict = {}
+        if hashid in inverse_index:
+            pos_dict = inverse_index[hashid]
+        else:
+            pos_dict = img_inverse_index[hashid]
         # supposing that a hashId occurs only 1 time in each doc
         bbox_list = [b[0] for b in pos_dict.values()]
         if is_same_location(bbox_list):
             universal_hashes_same_position.add(hashid)
 
-    for hid in universal_hashes_:
-        if hid not in universal_hashes_same_position:
-            doc_dict = inverse_index[hid]
-            docid = list(doc_dict.keys())[0]
-            # for bbox in doc_dict[docid]:
-            #     print(collection_dict[docid][bbox])
-            #     print("------")
-
-    # TODO: process images_block to check universal image
+    # for hid in universal_hashes_:
+    #     if hid not in universal_hashes_same_position:
+    #         doc_dict = inverse_index[hid]
+    #         docid = list(doc_dict.keys())[0]
+    #         # for bbox in doc_dict[docid]:
+    #         #     print(collection_dict[docid][bbox])
+    #         #     print("------") 
+    
+    
+    
     # ----------------------------------------------------------
     # make xml
     page_node = etree.Element('page')
     univ_block_node = etree.SubElement(page_node,"universal_blocks")
     for hashid in universal_hashes_:
-        pos_dict = inverse_index[hashid]  # {docid: [bbox]}
+        pos_dict = {}
         same_location = hashid in universal_hashes_same_position
-        bbox_str = list(pos_dict.values())[0][0]
-        docid = list(pos_dict.keys())[0]
-        block_text = collection_dict[docid][bbox_str]
+        if hashid in img_inverse_index:
+            type_ = "img"
+            pos_dict = img_inverse_index[hashid]
+        else:
+            pos_dict = inverse_index[hashid]  # {docid: [bbox]}
+        
+        bbox_str_ = list(pos_dict.values())[0][0]
+        bbox_str = bbox_str_
         type_ = "unk"
         if hashid in block_with_date:
             type_ = "date"
         elif hashid in block_with_page:
-            type_ = "page"
+            type_ = "pagination"
         if not same_location:
             bbox_str = ""
-        blocknode= etree.SubElement(univ_block_node,"textblock", fixedLocation=str(same_location).lower(), 
-                                    type=type_, bbox=bbox_str)
-        blocknode.text = block_text
+        if hashid in img_inverse_index:
+            type_ = "img"
+            blocknode = etree.SubElement(univ_block_node,"image", fixedLocation=str(same_location).lower(), 
+                                        type=type_, bbox=bbox_str)
+            blocknode.text = hashid  # img filename
+        else:
+            blocknode = etree.SubElement(univ_block_node,"textblock", fixedLocation=str(same_location).lower(), 
+                                        type=type_, bbox=bbox_str)
+            docid = list(pos_dict.keys())[0]
+            for tag in collection_dict[docid][bbox_str_]:
+                if tag["type"] == "br":
+                    br_node = etree.SubElement(blocknode,"br")
+                else:  # type = span
+                    span_node = etree.SubElement(blocknode,"span", fontFamily=tag["fontFamily"], size=tag["size"], 
+                                            color=tag["color"], bbox=tag["bbox"])
+                    span_node.text = tag["text"]
         
     # for bbox, (W,H) in img_blocks:
     #     bbox_str = ",".join([str(i) for i in bbox])
@@ -183,7 +260,9 @@ def main(inputdir:str):
 
 
 if __name__ == "__main__":
-    out_xml_str = main("/home/jean/myriad/projects/poc/migration_ccm/data/sample")
-    with open("/home/jean/myriad/projects/poc/migration_ccm/data/sample/struct.xml","wb") as f:
+    indir = "/home/jean/myriad/projects/poc/migration_ccm/data/sample"
+    outdir = "/home/jean/myriad/projects/poc/migration_ccm/data/sample_output"
+    out_xml_str = main(indir, outdir)
+    with open(outdir+ "/struct.xml","wb") as f:
         f.write(out_xml_str)
     

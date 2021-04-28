@@ -7,10 +7,11 @@ if PROJECT_DIR not in sys.path:
 
 from io import BytesIO, StringIO
 from pathlib import Path
+from typing import Dict, List
 
 from pdfminer.converter import (HTMLConverter, PDFPageAggregator,
                                 TextConverter, XMLConverter)
-from pdfminer.layout import LAParams,LTPage
+from pdfminer.layout import LAParams, LTFigure,LTPage,LTImage
 from pdfminer.pdfdocument import PDFDocument
 from pdfminer.pdfinterp import PDFPageInterpreter, PDFResourceManager
 from pdfminer.pdfpage import PDFPage, PDFTextExtractionNotAllowed
@@ -55,7 +56,7 @@ def pdf_to_pages(path):
         path (str)
 
     Returns:
-        dict: []
+        list of pdfminer.layout.LTPage
     """
     fp = open(path, 'rb')
     # Create a PDF parser object associated with the file object.
@@ -73,15 +74,13 @@ def pdf_to_pages(path):
     # Create a PDF page aggregator object.
     device = PDFPageAggregator(rsrcmgr, laparams=laparams)
     interpreter = PDFPageInterpreter(rsrcmgr, device)
-    i = 0
-    dic = {}
+    output = []
     for page in PDFPage.get_pages(fp):
         interpreter.process_page(page)
         # receive the LTPage object for the page.
         layout:LTPage = device.get_result()
-        dic[i] = layout
-        i = i + 1
-    return dic
+        output.append(layout)
+    return output
 
 
 def pdf_to_xml_tree(path:str):
@@ -91,10 +90,17 @@ def pdf_to_xml_tree(path:str):
     return tree
 
 
+def get_attrib(node,_attrib):
+    if _attrib in node.attrib:
+        return node.attrib[_attrib]
+    return None
+
+
 def get_bbox(node):
     """(x0,y0,x1,y1)"""
-    if "bbox" in node.attrib:
-        return tuple(map(float,node.attrib["bbox"].split(",")))
+    bbox = get_attrib(node,"bbox")
+    if bbox:
+        return tuple(map(float,bbox.split(",")))
     return None
 
 
@@ -115,7 +121,71 @@ def get_page_dimension(root, pageno=1):
     if bbox:
         _, _, pageW, pageH = bbox
         return pageW, pageH
-    
+   
+def fontinfo_textnode(textnode:etree._Element):
+    """ return fontinfo pattern: fontFamilyName$#size=XX$#color=(0,0,0)
+    """
+    fontname = ""  
+    if "font" in textnode.attrib:
+        fontname = get_attrib(textnode,"font")
+        size = get_attrib(textnode,"size")
+        color = get_attrib(textnode,"ncolour")
+        if size:
+            size = str(round(float(size)))
+            fontname += "$#size="+size
+        if color:
+            if color == "0":
+                color = "(0,0,0)"
+            else:  # ncolour="(0.075, 0.424, 0.741)"
+                color = [str(int(float(r)*255)) for r in color[1:-1].split(",")]   # convert to RGB 255 base
+                color = ",".join(color)
+                color = "("+ color + ")"
+            fontname += "$#color=" + color
+    return fontname
+
+def get_text_with_fontinfo_in_linenode(line_node:etree._Element):
+    """ 
+    Args:
+    ---
+        line_node (_Element):
+    Returns:
+    ---
+        list,dict: line_text, {font_name: [char positions]}
+    """
+    font_info = {}
+    line_text = []
+    fontname = ""
+    for pos,textnode in enumerate(line_node):
+        if "font" in textnode.attrib:
+            # if len(textnode.text) > 1:
+            #     print(textnode.text)
+            line_text.append(textnode.text)
+            fontname = get_attrib(textnode,"font")
+            size = get_attrib(textnode,"size")
+            color = get_attrib(textnode,"ncolour")
+            if size:
+                size = str(round(float(size)))
+                fontname += "$#size="+size
+            if color:
+                if color == "0":
+                    color = "(0,0,0)"
+                else:  # ncolour="(0.075, 0.424, 0.741)"
+                    color = [str(int(float(r)*255)) for r in color[1:-1].split(",")]   # convert to RGB 255 base
+                    color = ",".join(color)
+                    color = "("+ color + ")"
+                fontname += "$#color=" + color
+
+            if fontname in font_info:
+                font_info[fontname].append(pos)
+            else:
+                font_info[fontname] = [pos]
+        elif textnode.text == " ":
+            line_text.append(textnode.text)
+            if fontname in font_info:
+                font_info[fontname].append(pos)
+
+    return line_text, font_info
+
 def find_all_tag_recursively(root, tag_name):
     """ Recursively get all <tag_name> nodes in document
 
@@ -143,9 +213,12 @@ def find_all_textnodes(root):
 
     Returns:
     ---
-        list: [(bbox,text)]
+        list: [(bbox,text,fontname)]
     """
-    return find_all_tag_recursively(root,"text")
+    characters = find_all_tag_recursively(root,"text")
+    character_nodes_list = [(get_bbox(ch),ch.text,fontinfo_textnode(ch)) for ch in characters if "bbox" in ch.attrib ]
+    return character_nodes_list
+
 
 def find_textnodes_in_figure(root):
     """ Get all <text> nodes in all <figure> tags
@@ -156,7 +229,7 @@ def find_textnodes_in_figure(root):
 
     Returns:
     ---
-        list: [(bbox,text)]
+        list: [(bbox,text,fontname)]
     """
     character_nodes_list = []
     for page in root:
@@ -164,9 +237,10 @@ def find_textnodes_in_figure(root):
         figures = page.findall("figure")
         for fig in figures:
             characters = fig.findall("text")
-            character_nodes_list += [(get_bbox(ch),ch.text) for ch in characters if "bbox" in ch.attrib]
+            character_nodes_list += [(get_bbox(ch),ch.text,fontinfo_textnode(ch)) for ch in characters if "bbox" in ch.attrib]
         break # currently support 1st page
     return character_nodes_list
+
 
 def find_all_textbox_nodes(root):
     """ Get all <textbox> in document
@@ -176,7 +250,7 @@ def find_all_textbox_nodes(root):
 
     Returns:
     ---
-        list: list of (bbox, line_list); line=(bbox,txt)
+        list: list of (bbox, line_list); line=(bbox,txt,font_info); font_info={fontname:[positions]}
     """
     block_list = []  # list of (bbox, line_list); line=(bbox,txt)
     for page in root:
@@ -185,33 +259,15 @@ def find_all_textbox_nodes(root):
             if "bbox" in textbox.attrib:
                 block_bbox = get_bbox(textbox)
                 block_lines = []
-                for textline in textbox:
-                    if "bbox" in textline.attrib:
-                        linebbox = get_bbox(textline)
-                        linetext = "".join(textline.itertext()).replace("\n","")
-                        block_lines.append((linebbox,linetext))
+                for linenode in textbox:
+                    if "bbox" in linenode.attrib:
+                        linebbox = get_bbox(linenode)
+                        # linetext = "".join(textline.itertext()).replace("\n","")
+                        linetext, font_info = get_text_with_fontinfo_in_linenode(linenode)
+                        block_lines.append((linebbox,linetext,font_info)) 
                 block_list.append((block_bbox,block_lines))
         break  # 1st page only
     return block_list
-
-
-def find_all_images(root):
-    """
-    Return
-    ---
-        list of (bbox,(W,H))
-    """
-    img_list = []  # list of (bbox,(W,H))
-    img_tags = find_all_tag_recursively(root,"image")
-    for img in img_tags:
-        parent_node = img.getparent()
-        size = (int(img.attrib["width"]),int(img.attrib["height"]))
-        bbox = None
-        # print(f'image size: {img.attrib["width"]}x{img.attrib["height"]}',)
-        if parent_node is not None:
-            bbox = get_bbox(parent_node)
-        img_list.append((bbox,size))
-    return img_list
 
 
 def find_all_textboxes_A(root):
@@ -223,7 +279,7 @@ def find_all_textboxes_A(root):
 
     Return:
     ---
-        blocks_list (list): [(bbox, line_list)]. line=(bbox, txt)
+        blocks_list (list): [(bbox, line_list)]. line=(bbox,txt,font_info); font_info={fontname:[positions]}
     """
     block_list = []  # list of (bbox, line_list). line=(bbox, txt)
     block_list = grouping_text(find_all_tag_recursively(root,"text"))
@@ -239,7 +295,7 @@ def find_all_textboxes_B(root):
 
     Return:
     ---
-        blocks_list (list): [(bbox, line_list)]. line=(bbox, txt)
+        blocks_list (list): [(bbox, line_list)]. line=(bbox, txt, fontinfo)
     """
     block_list = []  # list of (bbox, line_list). line=(bbox, txt)
 
@@ -247,3 +303,58 @@ def find_all_textboxes_B(root):
     block_list += grouping_text(find_textnodes_in_figure(root)) # 2nd list of blocks
     block_list.sort(key=lambda block: -block[0][1])  # sort top-down
     return block_list
+
+
+
+def find_all_images_in_xml(root):
+    """
+    Return
+    ---
+        list of (bbox,(W,H))
+    """
+    img_list = []  # list of (bbox,(W,H))
+    img_tags = find_all_tag_recursively(root[0],"image")  # find in 1st page only
+    for img in img_tags:
+        parent_node = img.getparent()
+        size = (int(img.attrib["width"]),int(img.attrib["height"]))
+        bbox = None
+        # print(f'image size: {img.attrib["width"]}x{img.attrib["height"]}',)
+        if parent_node is not None:
+            bbox = get_bbox(parent_node)
+        img_list.append((bbox,size))
+    return img_list
+
+
+def find_all_images_in_page(page:LTPage):
+    """
+
+    Args:
+    ---
+        page (LTPage)
+
+    Returns:
+    ---
+        list of LTImage
+    """
+    img_list = []
+    parent = page
+    if hasattr(parent,"_objs"):
+        for obj in parent._objs:
+            if isinstance(obj,LTImage):
+                img_list.append(obj)
+            elif isinstance(obj, LTFigure):
+                img_list.extend(find_all_images_in_page(obj))
+    return img_list
+
+
+def find_all_images_in_document(path, first_page=False)->Dict[int,LTImage]:
+    """ 
+    """
+    output_dict = {}
+    page_list = pdf_to_pages(path)
+    for i,page in enumerate(page_list):
+        img_list = find_all_images_in_page(page)
+        output_dict[i] = img_list
+        if first_page:
+            break
+    return output_dict

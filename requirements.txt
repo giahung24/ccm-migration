@@ -1,3 +1,4 @@
 pdfminer.six==20201018
 lxml
 numpy
+pillow
