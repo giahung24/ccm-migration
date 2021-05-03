@@ -1,10 +1,8 @@
 
 import os, sys
 
-
-
 this_dir = os.path.dirname(os.path.abspath(__file__))
-PROJECT_DIR = '/'.join(this_dir.split('/')[:-1])
+PROJECT_DIR = '/'.join(this_dir.split('/')[:-2])
 if PROJECT_DIR not in sys.path:
     sys.path.insert(1, PROJECT_DIR)
 
@@ -14,8 +12,17 @@ from typing import List, Tuple
 import hashlib
 import numpy as np
 import itertools
+import unicodedata
 
 
+
+def remove_accent(txt):
+    """ Remove french accent from str
+    """
+    #if type(txt) != unicode:
+    #    txt = unicode(txt, 'utf-8')
+    s2 = unicodedata.normalize('NFD', txt).encode('ascii', 'ignore')
+    return s2.decode("utf-8")
 
 
 def convert_bbox_y(page_h, bbox) -> Tuple[float]:
@@ -264,6 +271,16 @@ def convert_fontlist_to_posdict(fonts_list):
     return res
 
 def is_same_location(bbox_list:List):
+    """ Given a list of bbox, check if they a "the same" (within 5 pixels of derivation)
+
+    Args:
+    ---
+        bbox_list (List): list of bbox (x0,y0,x1,y1)
+
+    Returns:
+    ---
+        bool
+    """
     w_ratios = []  # list of (x0,width) in proportion to page_W
     h_ratios = []  # list of (y0,height) in proportion to page_H
     if bbox_list:

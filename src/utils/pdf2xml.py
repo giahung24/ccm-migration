@@ -1,7 +1,7 @@
 import os, sys
 
 this_dir = os.path.dirname(os.path.abspath(__file__))
-PROJECT_DIR = '/'.join(this_dir.split('/')[:-1])
+PROJECT_DIR = '/'.join(this_dir.split('/')[:-2])
 if PROJECT_DIR not in sys.path:
     sys.path.insert(1, PROJECT_DIR)
 
@@ -250,7 +250,10 @@ def find_all_textbox_nodes(root):
 
     Returns:
     ---
-        list: list of (bbox, line_list); line=(bbox,txt,font_info); font_info={fontname:[positions]}
+        list: list of (bbox, line_list); 
+            bbox=tuple of float(x0,y0,x1,y1)
+            line=(bbox,txt,font_info); 
+            font_info={fontname:[positions]}
     """
     block_list = []  # list of (bbox, line_list); line=(bbox,txt)
     for page in root:

@@ -9,8 +9,9 @@ from lxml import etree
 from typing import List, Tuple
 # from PIL import Image 
 
-from src.utils import detect_range, determine_image_type, is_same_location, sha256_hash_str, sha256_hash_byte
+from src.utils import detect_range, is_same_location, sha256_hash_str, sha256_hash_byte
 from src.utils.date_util import get_dates_in_text
+from src.utils.address_util import find_codepostal
 from src.utils.pdf2xml import find_all_images_in_document, get_page_dimension, pdf_to_xml_tree,find_all_textboxes_B, \
                         find_all_images_in_xml
 
@@ -84,23 +85,57 @@ def contruct_block_html(line_list:List[Tuple]):
     return html_content
 
 
+def text_end_with_postal_pattern(text):
+    """Check if there is a codepostal_city at the end of the text"""
+    list_cp_found = find_codepostal(text)
+    if list_cp_found:
+        cp,city = list_cp_found[-1]
+        index_ = text.index(cp) + len(cp)
+        tail = text[index_:].strip()
+        if len(tail.replace("-"," ").split()) <= len(city.replace("-"," ").split()) + 2:
+            return True
+    return False
+
+
+def get_position_key(bbox):
+    """ Generate key for bbox using x0, y1. (rounded by 10)
+
+    Args:
+    ---
+        bbox (tuple[float] or str): x0,y0,x1,y1
+    Returns:
+    ---
+        str: "x0_y1"
+    """
+    if isinstance(bbox,str):
+        bbox = [float(b) for b in bbox.split(",")]
+    x0,_,_,y1  = bbox
+    x0 = int(round(x0,-1))
+    y1 = int(round(y1,-1))
+    return f"{x0}_{y1}"
+
+
 def main(inputdir:str, output_dir:str):
-    """[summary]
+    """ Main app
     """
     in_dir = Path(inputdir)
+
+    # dictionnaries
     inverse_index = {}  # block_hash -> {docid: [bbox_str]}
     img_inverse_index = {}  # img_hash -> {docid: [bbox_str]}
     collection_dict = {}  # docid -> {page_dim: (W,H), bbox_str : blocktext}
     collection_img_dict = {}   # {docid -> {bbox_str -> (width, height, bytehash)}}
+    position_hash_dict = {}  # {"x0_y0" -> [hash_ids]}    used with get_position_key()
 
+    # type of box
     block_with_page = set()  # {block_hash} of block with "page" in text
     block_with_date = set()  # {block_hash} of block with some dates in text
-
+    block_with_address = set()  # {block_hash} of block with codepostal_city an the end of text
 
 
     for path in in_dir.glob("*.pdf"):
         docid = path.stem
-
+        # print("DOCUMENT ::", docid)
         path_str = path.as_posix()
         root = pdf_to_xml_tree(path_str)
         txt_blocks = find_all_textboxes_B(root)  # list of (bbox, [ (linebbox,linetxt) ])
@@ -149,6 +184,14 @@ def main(inputdir:str, output_dir:str):
                     docpos_dict[docid] = [bbox_str]
             else:
                 inverse_index[txt_hash] = {docid: [bbox_str]}
+            
+            # ---- make position_hash_dict
+            poskey = get_position_key(b_bbox)
+            if poskey in position_hash_dict:
+                position_hash_dict[poskey].append(txt_hash)
+            else:
+                position_hash_dict[poskey] = [txt_hash]
+
             # ---------------------------
             # --- looking for blocks : "page x"
             if 1 < len(box_text_words) < 5 and "page" in box_text.lower():
@@ -156,7 +199,9 @@ def main(inputdir:str, output_dir:str):
             # --- looking for blocks : "date"
             elif 3 < len(box_text_words) < 10 and get_dates_in_text(box_text.lower()):
                 block_with_date.add(txt_hash)
-            # TODO: looking for blocks "name, address"
+            if text_end_with_postal_pattern(box_text):
+                block_with_address.add(txt_hash)
+                # print("adress found")
             # --------------------------------------
             
     
@@ -193,14 +238,16 @@ def main(inputdir:str, output_dir:str):
         if is_same_location(bbox_list):
             universal_hashes_same_position.add(hashid)
 
-    # for hid in universal_hashes_:
-    #     if hid not in universal_hashes_same_position:
-    #         doc_dict = inverse_index[hid]
-    #         docid = list(doc_dict.keys())[0]
-    #         # for bbox in doc_dict[docid]:
-    #         #     print(collection_dict[docid][bbox])
-    #         #     print("------") 
-    
+    # --- using position_hash_dict to get boxes on the "same" location accross docs
+    # -- get first address_box
+    addr_blocks_same_location = set()
+    if block_with_address:
+        samplehash = list(block_with_address)[0]
+        bbox_str = list(inverse_index[samplehash].values())[0][0]
+        poskey = get_position_key(bbox_str)
+        same_pos_blocks = position_hash_dict[poskey]
+        addr_blocks_same_location = set(same_pos_blocks).intersection(block_with_address)
+            
     
     
     # ----------------------------------------------------------
@@ -241,7 +288,15 @@ def main(inputdir:str, output_dir:str):
                     span_node = etree.SubElement(blocknode,"span", fontFamily=tag["fontFamily"], size=tag["size"], 
                                             color=tag["color"], bbox=tag["bbox"])
                     span_node.text = tag["text"]
-        
+    
+    # --
+    if len(addr_blocks_same_location) / corpus_len > 3/4:
+        # number of blocks with address and on same location is >= 3/4 of collections
+        samplehash = list(addr_blocks_same_location)[0]
+        bbox_str = list(inverse_index[samplehash].values())[0][0]
+        blocknode = etree.SubElement(univ_block_node,"textblock", fixedLocation="true", 
+                    type="address", bbox=bbox_str)
+
     # for bbox, (W,H) in img_blocks:
     #     bbox_str = ",".join([str(i) for i in bbox])
     #     imgnode = etree.SubElement(univ_block_node,"image", bbox=bbox_str, width=str(W), height=str(H))
