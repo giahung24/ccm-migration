@@ -7,6 +7,7 @@ if PROJECT_DIR not in sys.path:
 from pathlib import Path
 from lxml import etree 
 from typing import List, Tuple
+from tqdm import tqdm
 # from PIL import Image 
 
 from src.utils import detect_range, is_same_location, sha256_hash_str, sha256_hash_byte
@@ -16,27 +17,38 @@ from src.utils.pdf2xml import find_all_images_in_document, get_page_dimension, p
                         find_all_images_in_xml
 
 
-def export_to_my_xml(root, out_path):
-    txt_blocks = find_all_textboxes_B(root)  # list of (bbox, [ (linebbox,linetxt) ])
-    img_blocks = find_all_images_in_xml(root)  # [ (bbox, (W,H) ) ]
+def export_to_my_xml(txt_blocks, img_blocks, pdf_path, outdir):
+    
+    # txt_blocks = find_all_textboxes_B(root)  # list of (bbox, [ (linebbox,linetxt) ])
+    # img_blocks = find_all_images_in_xml(root)  # [ LTImage]
     page_node = etree.Element('page')
     txtblock_node = etree.SubElement(page_node,"textblocks")
     for b_bbox, linelist in txt_blocks:
         bbox_str = ",".join([str(i) for i in b_bbox])
         blocknode = etree.SubElement(txtblock_node,"textblock", bbox=bbox_str)
-        for lbbox,linetxt in linelist:
-            bbox_str = ",".join([str(i) for i in lbbox])
-            linenode = etree.SubElement(blocknode,"textline",bbox=bbox_str)
-            linenode.text = linetxt
+        for tag in contruct_block_html(linelist):
+            if tag["type"] == "br":
+                br_node = etree.SubElement(blocknode,"br")
+            else:  # type = span
+                span_node = etree.SubElement(blocknode,"span", fontFamily=tag["fontFamily"], size=tag["size"], 
+                                        color=tag["color"], bbox=tag["bbox"])
+                span_node.text = tag["text"]
+        # for lbbox,linetxt,fontinfo in linelist:
+        #     bbox_str = ",".join([str(i) for i in lbbox])
+        #     linenode = etree.SubElement(blocknode,"textline",bbox=bbox_str)
+        #     linenode.text = linetxt
     imgs_node = etree.SubElement(page_node,"images")
-    for bbox, (W,H) in img_blocks:
-        bbox_str = ",".join([str(i) for i in bbox])
-        imgnode = etree.SubElement(imgs_node,"image", bbox=bbox_str, width=str(W), height=str(H))
+    
+    for img in img_blocks:
+        bbox_str = ",".join([str(i) for i in img.bbox])
+        imgnode = etree.SubElement(imgs_node,"image", bbox=bbox_str)
+        # imgnode
     # Make a new document tree
     doc = etree.ElementTree(page_node)
     etree.indent(doc, space="    ")
     # outstr = etree.tostring(doc)
     # Save to XML file
+    out_path = pdf_path[:-4]+".blocks.xml"
     with open(out_path, 'wb') as outFile:
         doc.write(outFile, xml_declaration=True, encoding='utf-8',pretty_print=True)
         return 1
@@ -115,7 +127,7 @@ def get_position_key(bbox):
     return f"{x0}_{y1}"
 
 
-def main(inputdir:str, output_dir:str):
+def main(inputdir:str, output_dir:str, export_org_xml=True):
     """ Main app
     """
     in_dir = Path(inputdir)
@@ -133,15 +145,26 @@ def main(inputdir:str, output_dir:str):
     block_with_address = set()  # {block_hash} of block with codepostal_city an the end of text
 
 
-    for path in in_dir.glob("*.pdf"):
+    for path in tqdm(in_dir.glob("*.pdf")):
         docid = path.stem
         # print("DOCUMENT ::", docid)
         path_str = path.as_posix()
         root = pdf_to_xml_tree(path_str)
+        # save pdfminer_xml
+        if export_org_xml:
+            out_path = path_str[:-4]+".raw.xml"
+            doc = etree.ElementTree(root)
+            etree.indent(doc, space="    ")
+            with open(out_path, 'wb') as outFile:
+                doc.write(outFile, xml_declaration=True, encoding='utf-8',pretty_print=True)
+             
         txt_blocks = find_all_textboxes_B(root)  # list of (bbox, [ (linebbox,linetxt) ])
         img_blocks = find_all_images_in_document(path_str,first_page=True)  # [ LTImage ]
         if img_blocks:
             img_blocks = img_blocks[0]  #
+
+        export_to_my_xml(txt_blocks, img_blocks, path_str, outdir)
+
         collection_img_dict[docid] = {}  
         
         # --- browse each image block in this document
@@ -315,9 +338,9 @@ def main(inputdir:str, output_dir:str):
 
 
 if __name__ == "__main__":
-    indir = "/home/jean/myriad/projects/poc/migration_ccm/data/sample"
-    outdir = "/home/jean/myriad/projects/poc/migration_ccm/data/sample_output"
+    indir = "/home/jean/myriad/projects/poc/migration_ccm/data/A511"
+    outdir = "/home/jean/myriad/projects/poc/migration_ccm/data/A511_output"
     out_xml_str = main(indir, outdir)
-    with open(outdir+ "/struct.xml","wb") as f:
+    with open(outdir+ "/agg_struct.xml","wb") as f:
         f.write(out_xml_str)
     
