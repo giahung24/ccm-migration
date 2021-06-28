@@ -222,7 +222,8 @@ def oth_main(input_dir:str, output_dir:str, export_org_xml=True):
     """ TODO: 
         - une fonction qui va concatener les pages
         - detection des entetes et pied-de-page
-        - identification des bloques variables avec les hashes haut et bas
+        - identification des blocs variables avec les hashes haut et bas
+        - lier les champs dans le fichier JSON aux positions dans les blocs variables
     """
     
 
