@@ -127,7 +127,113 @@ def get_position_key(bbox):
     return f"{x0}_{y1}"
 
 
-def main(inputdir:str, output_dir:str, export_org_xml=True):
+def oth_main(input_dir:str, output_dir:str, export_org_xml=True):
+    """ TBD
+
+    Args:
+    ---
+        input_dir (str):  ...
+        output_dir (str):  ...
+        export_org_xml (bool, optional): Defaults to True.
+    """
+    in_dir = Path(input_dir)
+
+    # dictionnaries
+    inverse_index = {}  # block_hash -> {docid: [bbox_str]}
+    inverse_index_img = {}  # img_hash -> {docid: [bbox_str]}
+    collection_dict = {}  # docid -> {page_dim: (W,H), bbox_str : blocktext}
+    collection_dict_img = {}   # {docid -> {bbox_str -> (width, height, bytehash)}}
+    position_hash_dict = {}  # {"x0_y0" -> [hash_ids]}    used with get_position_key()
+
+    """ For each PDF in input dir """
+    for path in tqdm(in_dir.glob("*.pdf")):
+        docid = path.stem
+        # print("DOCUMENT ::", docid)
+        path_str = path.as_posix()
+        root = pdf_to_xml_tree(path_str)
+        # --- save pdfminer_xml
+        if export_org_xml:
+            out_path = path_str[:-4]+".raw.xml"
+            doc = etree.ElementTree(root)
+            etree.indent(doc, space="    ")
+            with open(out_path, 'wb') as outFile:
+                doc.write(outFile, xml_declaration=True, encoding='utf-8',pretty_print=True)
+             
+        txt_blocks = find_all_textboxes_B(root)  # list of (bbox, [ (linebbox,linetxt) ])
+        img_blocks = find_all_images_in_document(path_str,first_page=True)  # [ LTImage ]
+        if img_blocks:
+            img_blocks = img_blocks[0]  #
+
+        # export_to_my_xml(txt_blocks, img_blocks, path_str, outdir)
+
+        collection_dict_img[docid] = {}  
+        
+        # --- browse each image block in this document
+        for img in img_blocks:
+            bbox_str = ",".join([str(i) for i in img.bbox])
+            img_stream = img.stream.get_data()
+            hash_ = sha256_hash_byte(img_stream)
+            # img_ext = determine_image_type(img_stream)
+            outpath = Path(output_dir) / f"{hash_}.jpg"
+            if not outpath.exists():
+                with open(outpath,"wb") as f:
+                    f.write(img_stream)
+            collection_dict_img[docid][bbox_str] = (img.width,img.height,hash_)
+            if hash_ in inverse_index_img:
+                docpos_dict = inverse_index_img[hash_]
+                if docid in docpos_dict:
+                    docpos_dict[docid].append(bbox_str)
+                else:
+                    docpos_dict[docid] = [bbox_str]
+            else:
+                inverse_index_img[hash_] = {docid: [bbox_str]}
+
+        pageW,pageH = get_page_dimension(root)
+        collection_dict[docid] = {"page_dim":(int(pageW),int(pageH))}
+        # --- browse each text block
+        for b_bbox, linelist in txt_blocks:
+            bbox_str = ",".join([str(i) for i in b_bbox])
+            box_text = "\n".join("".join(line[1]) for line in linelist)
+            box_text_words = box_text.split()
+            # ----- make collection_dict
+            collection_dict[docid][bbox_str] = contruct_block_html(linelist)
+            # ---------------------------
+            # ----- make inverse_index
+            txt_hash = sha256_hash_str(box_text)
+            if txt_hash in inverse_index:
+                docpos_dict = inverse_index[txt_hash]
+                if docid in docpos_dict:
+                    docpos_dict[docid].append(bbox_str)
+                else:
+                    docpos_dict[docid] = [bbox_str]
+            else:
+                inverse_index[txt_hash] = {docid: [bbox_str]}
+            
+            # ---- make position_hash_dict
+            poskey = get_position_key(b_bbox)
+            if poskey in position_hash_dict:
+                position_hash_dict[poskey].append(txt_hash)
+            else:
+                position_hash_dict[poskey] = [txt_hash]
+
+    corpus_len = len(collection_dict)
+    universal_hashes_ = set()  # hashids that repeat in all doc
+    
+    """ TODO: 
+        - une fonction qui va concatener les pages
+        - detection des entetes et pied-de-page
+        - identification des bloques variables avec les hashes haut et bas
+    """
+    
+
+
+   
+
+
+
+
+
+def main_ignore(inputdir:str, output_dir:str, export_org_xml=True):
     """ Main app
     """
     in_dir = Path(inputdir)
@@ -340,7 +446,7 @@ def main(inputdir:str, output_dir:str, export_org_xml=True):
 if __name__ == "__main__":
     indir = "/home/jean/myriad/projects/poc/migration_ccm/data/A511"
     outdir = "/home/jean/myriad/projects/poc/migration_ccm/data/A511_output"
-    out_xml_str = main(indir, outdir)
+    out_xml_str = oth_main(indir, outdir)
     with open(outdir+ "/agg_struct.xml","wb") as f:
         f.write(out_xml_str)
     
