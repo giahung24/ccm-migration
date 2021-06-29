@@ -21,7 +21,7 @@ from lxml import etree
 from src.utils import grouping_text
 
 
-def _pdf_to_string(path, format='xml', password=''):
+def pdf_to_string(path, format='xml', password=''):
     rsrcmgr = PDFResourceManager()
     out_stream = BytesIO()
     laparams = LAParams()
@@ -33,6 +33,7 @@ def _pdf_to_string(path, format='xml', password=''):
         device = XMLConverter(rsrcmgr, out_stream, laparams=laparams)
     else:
         raise ValueError('provide format, either text, html or xml!')
+    
     fp = open(path, 'rb')
     interpreter = PDFPageInterpreter(rsrcmgr, device)
     maxpages = 0
@@ -85,7 +86,7 @@ def pdf_to_pages(path):
 
 def pdf_to_xml_tree(path:str):
     """ Read pdf file and return lxml etree object"""
-    string = _pdf_to_string(path)
+    string = pdf_to_string(path)
     tree = etree.fromstring(string.encode("utf-8"))
     return tree
 

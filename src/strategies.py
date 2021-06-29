@@ -17,8 +17,17 @@ from src.utils.pdf2xml import find_all_images_in_document, get_page_dimension, p
                         find_all_images_in_xml
 
 
-def export_to_my_xml(txt_blocks, img_blocks, pdf_path, outdir):
-    
+def save_to_file(root_node, out_path):
+    # Make a new document tree
+    doc = etree.ElementTree(root_node)
+    etree.indent(doc, space="    ")
+    # outstr = etree.tostring(doc)
+    # Save to XML file
+    with open(out_path, 'wb') as outFile:
+        doc.write(outFile, xml_declaration=True, encoding='utf-8',pretty_print=True)
+
+
+def export_to_my_xml(txt_blocks, img_blocks, out_path): 
     # txt_blocks = find_all_textboxes_B(root)  # list of (bbox, [ (linebbox,linetxt) ])
     # img_blocks = find_all_images_in_xml(root)  # [ LTImage]
     page_node = etree.Element('page')
@@ -42,17 +51,8 @@ def export_to_my_xml(txt_blocks, img_blocks, pdf_path, outdir):
     for img in img_blocks:
         bbox_str = ",".join([str(i) for i in img.bbox])
         imgnode = etree.SubElement(imgs_node,"image", bbox=bbox_str)
-        # imgnode
-    # Make a new document tree
-    doc = etree.ElementTree(page_node)
-    etree.indent(doc, space="    ")
-    # outstr = etree.tostring(doc)
-    # Save to XML file
-    out_path = pdf_path[:-4]+".blocks.xml"
-    with open(out_path, 'wb') as outFile:
-        doc.write(outFile, xml_declaration=True, encoding='utf-8',pretty_print=True)
-        return 1
-    return 0
+
+    save_to_file(page_node, out_path)
 
 
 def contruct_block_html(line_list:List[Tuple]):
@@ -164,7 +164,6 @@ def oth_main(input_dir:str, output_dir:str, export_org_xml=True):
         if img_blocks:
             img_blocks = img_blocks[0]  #
 
-        # export_to_my_xml(txt_blocks, img_blocks, path_str, outdir)
 
         collection_dict_img[docid] = {}  
         
@@ -228,9 +227,6 @@ def oth_main(input_dir:str, output_dir:str, export_org_xml=True):
     
 
 
-   
-
-
 
 
 
@@ -270,7 +266,8 @@ def main_ignore(inputdir:str, output_dir:str, export_org_xml=True):
         if img_blocks:
             img_blocks = img_blocks[0]  #
 
-        export_to_my_xml(txt_blocks, img_blocks, path_str, outdir)
+        out_path = path_str[:-4]+".blocks.xml"
+        export_to_my_xml(txt_blocks, img_blocks, out_path)
 
         collection_img_dict[docid] = {}  
         
