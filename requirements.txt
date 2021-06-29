@@ -3,3 +3,4 @@ lxml
 numpy
 pillow
 flask
+tqdm

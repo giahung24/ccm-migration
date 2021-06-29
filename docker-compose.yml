@@ -1,0 +1,11 @@
+version: '3'
+services:
+  app:
+    environment:
+        - PYTHONUNBUFFERED=1
+    image: migrationccm:latest
+    ports:
+        - "5000:5000"
+    volumes:
+      - .:/code
+    working_dir: /code
