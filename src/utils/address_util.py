@@ -11,7 +11,7 @@ if PROJECT_DIR not in sys.path:
 from src.utils import remove_accent
 
 
-f = open(PROJECT_DIR + '/src/data/codepostal_ville_dict.pkl', 'rb')
+f = open(PROJECT_DIR + '/src/basedata/codepostal_ville_dict.pkl', 'rb')
 CP_VILLE_DICT = pickle.load(f)  # d[cp] = [(nom_postal,nom_complet)]
 f.close()
 
