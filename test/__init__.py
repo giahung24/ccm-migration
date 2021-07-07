@@ -12,3 +12,4 @@ if __name__ == "__main__":
     page_dict = pdf_to_pages('/home/jean/myriad/projects/poc/migration_ccm/data/sample/A511000000109_000001.pdf')
     a = find_all_images_in_page(page_dict[0])
     p=0
+    t=1
